@@ -4,47 +4,55 @@
 session_id: "dejsonify-openproject-001"
 current_task:
   id: "de-jsonify-openproject"
-  phase: "migrate"
-  progress: 0.5
+  phase: "cache-architecture"
+  progress: 0.7
 
 mission: |
-  Kill JSON. Resurrect PostgreSQL.
+  Kill the 3-second lag. DragonflyDB hot cache + PostgreSQL JSONB warm cache.
   READ from openproject/ (upstream mirror, don't touch)
   WRITE to OpenProject_PostgreSQL/ (all changes here)
   Prep for Firefly/RUBBERDUCK compilation.
 
+architecture: |
+  Request → DragonflyDB (<1ms) → PostgreSQL JSONB (~5ms) → ROAR fallback (3s, cached)
+  Model change → after_commit → invalidate both tiers → background recompute
+
 agents_spawned:
   - json_hunter: "completed"
-  - postgresql_purist: "completed"
+  - postgresql_purist: "completed — redesigned as two-tier cache"
   - migration_surgeon: "completed"
   - qa_conscience: "pending"
 
 phases_completed:
-  - phase1_hunt: "397+ JSON serialization points found. 311 ROAR representers."
-  - phase2_design: "4 PostgreSQL views designed (work_packages, projects, versions, memberships)"
-  - phase3_migrate: "Reversible migration created with 7 HAL helper functions + 4 views"
+  - phase1_hunt: "397+ JSON serialization points. 311 ROAR representers."
+  - phase2_design: "Two-tier cache: DragonflyDB (hot) + PostgreSQL JSONB (warm)"
+  - phase3_migrate: "hal_cache table + HAL helper functions + 4 API views"
+  - phase4_refactor: "HalCache::Store, Invalidator, WarmJob, controller concern"
 
 decisions:
-  - task: "Target ROAR representers first (311 files)"
-    rationale: "Primary serialization layer, highest impact"
+  - task: "DragonflyDB over Redis"
+    rationale: "Multi-threaded, 25x memory efficiency, Redis-compatible"
     gate: FLOW
-  - task: "Use SQL IMMUTABLE functions for HAL helpers"
-    rationale: "PostgreSQL can cache/inline immutable functions"
+  - task: "Two-tier cache (DragonflyDB + PostgreSQL JSONB)"
+    rationale: "Hot = speed, warm = persistence. DragonflyDB dies, PG survives."
     gate: FLOW
-  - task: "Keep SCIM integration as-is"
-    rationale: "External protocol, not our JSON to kill"
+  - task: "ROAR runs in background only"
+    rationale: "Request path never touches Ruby serialization"
     gate: FLOW
-  - task: "SqlHal already exists in upstream"
-    rationale: "OpenProject already knows decorators are slow. Extend the pattern."
+  - task: "Version-stamped cache keys"
+    rationale: "hal:v3:work_package:1234:17 — lock_version prevents stale reads"
+    gate: FLOW
+  - task: "Cascade invalidation on FK changes"
+    rationale: "Status name change → all WPs with that status invalidated"
     gate: FLOW
 
 concepts_extracted:
-  - "ROAR decorator pattern: Model -> Representer -> HAL+JSON"
-  - "SqlHal: existing SQL-level optimization in OpenProject"
-  - "hal_link() function: reusable HAL link builder"
-  - "View-backed API: Model -> PostgreSQL View -> JSON response"
-  - "Permission gating needs separate solution (RLS or post-filter)"
+  - "Two-tier cache eliminates 3s lag without rewriting representers"
+  - "DragonflyDB = Redis API + multi-threaded + memory efficient"
+  - "after_commit invalidation = eventual consistency, not blocking"
+  - "Bulk warm on deploy = cold start protection"
+  - "PostgreSQL views still useful for direct SQL consumers (Firefly/RUBBERDUCK)"
 
-resonance_captures: 4
-concepts_extracted_count: 5
+resonance_captures: 7
+concepts_extracted_count: 10
 ```
